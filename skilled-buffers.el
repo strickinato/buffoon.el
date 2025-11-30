@@ -670,6 +670,28 @@ Routing rules:
                  (window-live-p skilled-buffers-secondary-window))
         (window--display-buffer buffer skilled-buffers-secondary-window 'reuse alist))))))
 
+(defun skilled-buffers--switch-to-buffer-advice (buffer-or-name &optional norecord force-same-window)
+  "Advice for `switch-to-buffer' to route buffers to correct window.
+Routes buffers according to skilled-buffers rules when active."
+  (when (skilled-buffers--active-frame-p)
+    (let* ((buffer (window-normalize-buffer-to-switch-to buffer-or-name))
+           (in-primary-list (memq buffer skilled-buffers-primary-list)))
+      ;; Select the appropriate window before the actual switch happens
+      (cond
+       ;; If buffer is in PRIMARY list, ensure we're in PRIMARY window
+       (in-primary-list
+        (when (and skilled-buffers-primary-window
+                   (window-live-p skilled-buffers-primary-window)
+                   (not (eq (selected-window) skilled-buffers-primary-window)))
+          (select-window skilled-buffers-primary-window)))
+       
+       ;; Otherwise, ensure we're in SECONDARY window
+       (t
+        (when (and skilled-buffers-secondary-window
+                   (window-live-p skilled-buffers-secondary-window)
+                   (not (eq (selected-window) skilled-buffers-secondary-window)))
+          (select-window skilled-buffers-secondary-window)))))))
+
 ;;; Minor Mode
 
 ;;;###autoload
@@ -686,8 +708,12 @@ Routing rules:
         
         ;; Add display buffer action at the BEGINNING (highest priority)
         ;; This ensures skilled-buffers takes precedence over other rules (magit, etc.)
-        (push '(".*" skilled-buffers--display-buffer-action)
+        ;; Use ^.* to properly match all buffer names from the start
+        (push '("^.*" skilled-buffers--display-buffer-action)
               display-buffer-alist)
+        
+        ;; Add advice to switch-to-buffer to intercept manual buffer switches
+        (advice-add 'switch-to-buffer :before #'skilled-buffers--switch-to-buffer-advice)
         
         (message "Skilled buffers mode enabled"))
     
@@ -700,6 +726,9 @@ Routing rules:
           (cl-remove-if (lambda (entry)
                           (eq (cadr entry) 'skilled-buffers--display-buffer-action))
                         display-buffer-alist))
+    
+    ;; Remove advice
+    (advice-remove 'switch-to-buffer #'skilled-buffers--switch-to-buffer-advice)
     
     (message "Skilled buffers mode disabled")))
 
