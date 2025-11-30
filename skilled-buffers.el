@@ -8,17 +8,26 @@
 
 ;;; Commentary:
 ;; A dual-window buffer management system with PRIMARY and SECONDARY windows.
-;; Manually promote buffers to an ordered list that controls PRIMARY display.
+;; Each window has its own ordered list of promoted buffers.
 ;;
-;; The PRIMARY window (left) displays promoted buffers from an ordered list.
-;; The SECONDARY window (right) displays all other buffers by default.
+;; The PRIMARY window (left) displays buffers from the PRIMARY ordered list.
+;; The SECONDARY window (right) displays buffers from the SECONDARY ordered list,
+;; but can also be interrupted by new buffers/popups.
 ;;
 ;; Main functions:
-;; - `skilled-buffers-setup-layout': Initialize the dual-window layout
-;; - `skilled-buffers-promote': Promote current buffer to PRIMARY
-;; - `skilled-buffers-demote': Demote current buffer from PRIMARY
-;; - `skilled-buffers-next': Cycle to next promoted buffer
-;; - `skilled-buffers-previous': Cycle to previous promoted buffer
+;; PRIMARY:
+;; - `skilled-buffers-promote-primary': Promote current buffer to PRIMARY
+;; - `skilled-buffers-demote-primary': Demote current buffer from PRIMARY
+;; - `skilled-buffers-next': Cycle to next PRIMARY buffer
+;; - `skilled-buffers-previous': Cycle to previous PRIMARY buffer
+;; - `skilled-buffers-switch-to-N': Jump to Nth PRIMARY buffer
+;;
+;; SECONDARY:
+;; - `skilled-buffers-promote-secondary': Promote current buffer to SECONDARY
+;; - `skilled-buffers-demote-secondary': Demote current buffer from SECONDARY
+;; - `skilled-buffers-secondary-next': Cycle to next SECONDARY buffer
+;; - `skilled-buffers-secondary-previous': Cycle to previous SECONDARY buffer
+;; - `skilled-buffers-secondary-switch-to-N': Jump to Nth SECONDARY buffer
 
 ;;; Code:
 
@@ -50,14 +59,24 @@
 (defvar skilled-buffers-secondary-window nil
   "The SECONDARY window (right side).")
 
-(defvar skilled-buffers-list '()
+(defvar skilled-buffers-primary-list '()
   "Ordered list of buffer objects promoted to PRIMARY window.")
 
-(defvar skilled-buffers-index 0
-  "Current index into `skilled-buffers-list'.")
+(defvar skilled-buffers-primary-index 0
+  "Current index into `skilled-buffers-primary-list'.")
+
+(defvar skilled-buffers-secondary-list '()
+  "Ordered list of buffer objects promoted to SECONDARY window.")
+
+(defvar skilled-buffers-secondary-index 0
+  "Current index into `skilled-buffers-secondary-list'.")
 
 (defvar skilled-buffers-frame nil
   "The frame where skilled-buffers layout is active.")
+
+;; Backward compatibility aliases
+(defvaralias 'skilled-buffers-list 'skilled-buffers-primary-list)
+(defvaralias 'skilled-buffers-index 'skilled-buffers-primary-index)
 
 ;;; Layout Management
 
@@ -76,7 +95,7 @@ Creates a 50/50 vertical split and stores window references."
   (setq skilled-buffers-secondary-window (next-window skilled-buffers-primary-window))
   
   ;; Show dashboard in PRIMARY if no promoted buffers
-  (when (null skilled-buffers-list)
+  (when (null skilled-buffers-primary-list)
     (skilled-buffers--show-dashboard-in-primary))
   
   (message "Skilled buffers layout initialized"))
@@ -101,39 +120,39 @@ Call this function if you want to restore the layout after changes."
         ;; Fallback to *scratch* if dashboard doesn't exist
         (switch-to-buffer "*scratch*")))))
 
-;;; Buffer Promotion
+;;; Buffer Promotion - PRIMARY
 
-(defun skilled-buffers-promote ()
+(defun skilled-buffers-promote-primary ()
   "Promote current buffer to the PRIMARY window.
-If already promoted, display message. If in SECONDARY, move to PRIMARY
-and show previous buffer in SECONDARY."
+If already promoted to PRIMARY, display message.
+Buffers can be in both PRIMARY and SECONDARY lists."
   (interactive)
   (let ((buf (current-buffer)))
-    (if (memq buf skilled-buffers-list)
-        (message "Already promoted")
+    (if (memq buf skilled-buffers-primary-list)
+        (message "Already promoted to PRIMARY")
       ;; Add to end of list
-      (setq skilled-buffers-list (append skilled-buffers-list (list buf)))
-      (setq skilled-buffers-index (1- (length skilled-buffers-list)))
+      (setq skilled-buffers-primary-list (append skilled-buffers-primary-list (list buf)))
+      (setq skilled-buffers-primary-index (1- (length skilled-buffers-primary-list)))
       
       ;; Display in PRIMARY
       (skilled-buffers--display-in-primary buf)
       
-      (message "Promoted: %s" (buffer-name buf)))))
+      (message "Promoted to PRIMARY: %s" (buffer-name buf)))))
 
-(defun skilled-buffers-demote ()
+(defun skilled-buffers-demote-primary ()
   "Demote current buffer from PRIMARY window.
 If currently viewing in PRIMARY, move buffer to SECONDARY and show
 previous promoted buffer (or dashboard) in PRIMARY."
   (interactive)
   (let ((buf (current-buffer)))
-    (if (not (memq buf skilled-buffers-list))
-        (message "Buffer is not promoted")
+    (if (not (memq buf skilled-buffers-primary-list))
+        (message "Buffer is not promoted to PRIMARY")
       ;; Remove from list
-      (setq skilled-buffers-list (delq buf skilled-buffers-list))
+      (setq skilled-buffers-primary-list (delq buf skilled-buffers-primary-list))
       
       ;; Adjust index if necessary
-      (when (>= skilled-buffers-index (length skilled-buffers-list))
-        (setq skilled-buffers-index (max 0 (1- (length skilled-buffers-list)))))
+      (when (>= skilled-buffers-primary-index (length skilled-buffers-primary-list))
+        (setq skilled-buffers-primary-index (max 0 (1- (length skilled-buffers-primary-list)))))
       
       ;; If we're in PRIMARY, move buffer to SECONDARY
       (when (and (skilled-buffers--active-frame-p)
@@ -147,24 +166,76 @@ previous promoted buffer (or dashboard) in PRIMARY."
             (switch-to-buffer buf)))
         
         ;; Show next promoted buffer in PRIMARY (or dashboard)
-        (if skilled-buffers-list
+        (if skilled-buffers-primary-list
             (skilled-buffers--display-in-primary 
-             (nth skilled-buffers-index skilled-buffers-list))
+             (nth skilled-buffers-primary-index skilled-buffers-primary-list))
           (skilled-buffers--show-dashboard-in-primary)))
       
-      (message "Demoted: %s" (buffer-name buf)))))
+      (message "Demoted from PRIMARY: %s" (buffer-name buf)))))
 
-(defun skilled-buffers-demote-by-name ()
-  "Interactively select and demote a promoted buffer."
+(defun skilled-buffers-demote-primary-by-name ()
+  "Interactively select and demote a PRIMARY promoted buffer."
   (interactive)
-  (if (null skilled-buffers-list)
-      (message "No promoted buffers")
-    (let* ((buffer-names (mapcar #'buffer-name skilled-buffers-list))
-           (choice (completing-read "Demote buffer: " buffer-names nil t))
+  (if (null skilled-buffers-primary-list)
+      (message "No PRIMARY promoted buffers")
+    (let* ((buffer-names (mapcar #'buffer-name skilled-buffers-primary-list))
+           (choice (completing-read "Demote PRIMARY buffer: " buffer-names nil t))
            (buf (get-buffer choice)))
       (when buf
         (with-current-buffer buf
-          (skilled-buffers-demote))))))
+          (skilled-buffers-demote-primary))))))
+
+;; Backward compatibility aliases
+(defalias 'skilled-buffers-promote 'skilled-buffers-promote-primary)
+(defalias 'skilled-buffers-demote 'skilled-buffers-demote-primary)
+(defalias 'skilled-buffers-demote-by-name 'skilled-buffers-demote-primary-by-name)
+
+;;; Buffer Promotion - SECONDARY
+
+(defun skilled-buffers-promote-secondary ()
+  "Promote current buffer to the SECONDARY window.
+If already promoted to SECONDARY, display message.
+Buffers can be in both PRIMARY and SECONDARY lists."
+  (interactive)
+  (let ((buf (current-buffer)))
+    (if (memq buf skilled-buffers-secondary-list)
+        (message "Already promoted to SECONDARY")
+      ;; Add to end of list
+      (setq skilled-buffers-secondary-list (append skilled-buffers-secondary-list (list buf)))
+      (setq skilled-buffers-secondary-index (1- (length skilled-buffers-secondary-list)))
+      
+      ;; Display in SECONDARY
+      (skilled-buffers--display-in-secondary buf)
+      
+      (message "Promoted to SECONDARY: %s" (buffer-name buf)))))
+
+(defun skilled-buffers-demote-secondary ()
+  "Demote current buffer from SECONDARY list.
+The buffer remains visible in SECONDARY window (whatever was last there stays)."
+  (interactive)
+  (let ((buf (current-buffer)))
+    (if (not (memq buf skilled-buffers-secondary-list))
+        (message "Buffer is not promoted to SECONDARY")
+      ;; Remove from list
+      (setq skilled-buffers-secondary-list (delq buf skilled-buffers-secondary-list))
+      
+      ;; Adjust index if necessary
+      (when (>= skilled-buffers-secondary-index (length skilled-buffers-secondary-list))
+        (setq skilled-buffers-secondary-index (max 0 (1- (length skilled-buffers-secondary-list)))))
+      
+      (message "Demoted from SECONDARY: %s" (buffer-name buf)))))
+
+(defun skilled-buffers-demote-secondary-by-name ()
+  "Interactively select and demote a SECONDARY promoted buffer."
+  (interactive)
+  (if (null skilled-buffers-secondary-list)
+      (message "No SECONDARY promoted buffers")
+    (let* ((buffer-names (mapcar #'buffer-name skilled-buffers-secondary-list))
+           (choice (completing-read "Demote SECONDARY buffer: " buffer-names nil t))
+           (buf (get-buffer choice)))
+      (when buf
+        (with-current-buffer buf
+          (skilled-buffers-demote-secondary))))))
 
 (defun skilled-buffers--display-in-primary (buffer)
   "Display BUFFER in PRIMARY window."
@@ -175,54 +246,63 @@ previous promoted buffer (or dashboard) in PRIMARY."
     (with-selected-window skilled-buffers-primary-window
       (switch-to-buffer buffer))))
 
-;;; Navigation
+(defun skilled-buffers--display-in-secondary (buffer)
+  "Display BUFFER in SECONDARY window."
+  (when (and (skilled-buffers--active-frame-p)
+             skilled-buffers-secondary-window
+             (window-live-p skilled-buffers-secondary-window)
+             (buffer-live-p buffer))
+    (with-selected-window skilled-buffers-secondary-window
+      (switch-to-buffer buffer))))
+
+;;; Navigation - PRIMARY
 
 (defun skilled-buffers-next ()
   "Cycle to next promoted buffer in PRIMARY window."
   (interactive)
-  (if (null skilled-buffers-list)
-      (message "No promoted buffers")
-    (setq skilled-buffers-index 
-          (mod (1+ skilled-buffers-index) (length skilled-buffers-list)))
-    (let ((buf (nth skilled-buffers-index skilled-buffers-list)))
+  (if (null skilled-buffers-primary-list)
+      (message "No PRIMARY promoted buffers")
+    (setq skilled-buffers-primary-index 
+          (mod (1+ skilled-buffers-primary-index) (length skilled-buffers-primary-list)))
+    (let ((buf (nth skilled-buffers-primary-index skilled-buffers-primary-list)))
       (skilled-buffers--display-in-primary buf)
-      (message "Switched to: %s (%d/%d)" 
+      (message "PRIMARY: %s (%d/%d)" 
                (buffer-name buf)
-               (1+ skilled-buffers-index)
-               (length skilled-buffers-list)))))
+               (1+ skilled-buffers-primary-index)
+               (length skilled-buffers-primary-list)))))
 
 (defun skilled-buffers-previous ()
   "Cycle to previous promoted buffer in PRIMARY window."
   (interactive)
-  (if (null skilled-buffers-list)
-      (message "No promoted buffers")
-    (setq skilled-buffers-index 
-          (mod (1- skilled-buffers-index) (length skilled-buffers-list)))
-    (let ((buf (nth skilled-buffers-index skilled-buffers-list)))
+  (if (null skilled-buffers-primary-list)
+      (message "No PRIMARY promoted buffers")
+    (setq skilled-buffers-primary-index 
+          (mod (1- skilled-buffers-primary-index) (length skilled-buffers-primary-list)))
+    (let ((buf (nth skilled-buffers-primary-index skilled-buffers-primary-list)))
       (skilled-buffers--display-in-primary buf)
-      (message "Switched to: %s (%d/%d)" 
+      (message "PRIMARY: %s (%d/%d)" 
                (buffer-name buf)
-               (1+ skilled-buffers-index)
-               (length skilled-buffers-list)))))
+               (1+ skilled-buffers-primary-index)
+               (length skilled-buffers-primary-list)))))
 
 (defun skilled-buffers-switch-to-n (n)
   "Switch PRIMARY window to Nth promoted buffer (1-indexed).
 Called with numeric prefix argument."
   (interactive "p")
-  (if (null skilled-buffers-list)
-      (message "No promoted buffers")
+  (if (null skilled-buffers-primary-list)
+      (message "No PRIMARY promoted buffers")
     (let ((index (1- n)))
-      (if (and (>= index 0) (< index (length skilled-buffers-list)))
+      (if (and (>= index 0) (< index (length skilled-buffers-primary-list)))
           (progn
-            (setq skilled-buffers-index index)
-            (let ((buf (nth index skilled-buffers-list)))
+            (setq skilled-buffers-primary-index index)
+            (let ((buf (nth index skilled-buffers-primary-list)))
               (skilled-buffers--display-in-primary buf)
-              (message "Switched to: %s (%d/%d)" 
+              (message "PRIMARY: %s (%d/%d)" 
                        (buffer-name buf)
                        (1+ index)
-                       (length skilled-buffers-list))))
-        (message "No buffer at position %d (have %d promoted buffers)" 
-                 n (length skilled-buffers-list))))))
+                       (length skilled-buffers-primary-list))))
+        (message "No PRIMARY buffer at position %d (have %d promoted buffers)" 
+                 n (length skilled-buffers-primary-list))))))
 
 ;; Convenience functions for direct access
 (defun skilled-buffers-switch-to-1 () "Switch to 1st promoted buffer." (interactive) (skilled-buffers-switch-to-n 1))
@@ -234,6 +314,68 @@ Called with numeric prefix argument."
 (defun skilled-buffers-switch-to-7 () "Switch to 7th promoted buffer." (interactive) (skilled-buffers-switch-to-n 7))
 (defun skilled-buffers-switch-to-8 () "Switch to 8th promoted buffer." (interactive) (skilled-buffers-switch-to-n 8))
 (defun skilled-buffers-switch-to-9 () "Switch to 9th promoted buffer." (interactive) (skilled-buffers-switch-to-n 9))
+
+;;; Navigation - SECONDARY
+
+(defun skilled-buffers-secondary-next ()
+  "Cycle to next promoted buffer in SECONDARY window."
+  (interactive)
+  (if (null skilled-buffers-secondary-list)
+      (message "No SECONDARY promoted buffers")
+    (setq skilled-buffers-secondary-index 
+          (mod (1+ skilled-buffers-secondary-index) (length skilled-buffers-secondary-list)))
+    (let ((buf (nth skilled-buffers-secondary-index skilled-buffers-secondary-list)))
+      (skilled-buffers--display-in-secondary buf)
+      (message "SECONDARY: %s (%d/%d)" 
+               (buffer-name buf)
+               (1+ skilled-buffers-secondary-index)
+               (length skilled-buffers-secondary-list)))))
+
+(defun skilled-buffers-secondary-previous ()
+  "Cycle to previous promoted buffer in SECONDARY window."
+  (interactive)
+  (if (null skilled-buffers-secondary-list)
+      (message "No SECONDARY promoted buffers")
+    (setq skilled-buffers-secondary-index 
+          (mod (1- skilled-buffers-secondary-index) (length skilled-buffers-secondary-list)))
+    (let ((buf (nth skilled-buffers-secondary-index skilled-buffers-secondary-list)))
+      (skilled-buffers--display-in-secondary buf)
+      (message "SECONDARY: %s (%d/%d)" 
+               (buffer-name buf)
+               (1+ skilled-buffers-secondary-index)
+               (length skilled-buffers-secondary-list)))))
+
+(defun skilled-buffers-secondary-switch-to-n (n)
+  "Switch SECONDARY window to Nth promoted buffer (1-indexed).
+Called with numeric prefix argument."
+  (interactive "p")
+  (if (null skilled-buffers-secondary-list)
+      (message "No SECONDARY promoted buffers")
+    (let ((index (1- n)))
+      (if (and (>= index 0) (< index (length skilled-buffers-secondary-list)))
+          (progn
+            (setq skilled-buffers-secondary-index index)
+            (let ((buf (nth index skilled-buffers-secondary-list)))
+              (skilled-buffers--display-in-secondary buf)
+              (message "SECONDARY: %s (%d/%d)" 
+                       (buffer-name buf)
+                       (1+ index)
+                       (length skilled-buffers-secondary-list))))
+        (message "No SECONDARY buffer at position %d (have %d promoted buffers)" 
+                 n (length skilled-buffers-secondary-list))))))
+
+;; Convenience functions for direct access to SECONDARY
+(defun skilled-buffers-secondary-switch-to-1 () "Switch SECONDARY to 1st promoted buffer." (interactive) (skilled-buffers-secondary-switch-to-n 1))
+(defun skilled-buffers-secondary-switch-to-2 () "Switch SECONDARY to 2nd promoted buffer." (interactive) (skilled-buffers-secondary-switch-to-n 2))
+(defun skilled-buffers-secondary-switch-to-3 () "Switch SECONDARY to 3rd promoted buffer." (interactive) (skilled-buffers-secondary-switch-to-n 3))
+(defun skilled-buffers-secondary-switch-to-4 () "Switch SECONDARY to 4th promoted buffer." (interactive) (skilled-buffers-secondary-switch-to-n 4))
+(defun skilled-buffers-secondary-switch-to-5 () "Switch SECONDARY to 5th promoted buffer." (interactive) (skilled-buffers-secondary-switch-to-n 5))
+(defun skilled-buffers-secondary-switch-to-6 () "Switch SECONDARY to 6th promoted buffer." (interactive) (skilled-buffers-secondary-switch-to-n 6))
+(defun skilled-buffers-secondary-switch-to-7 () "Switch SECONDARY to 7th promoted buffer." (interactive) (skilled-buffers-secondary-switch-to-n 7))
+(defun skilled-buffers-secondary-switch-to-8 () "Switch SECONDARY to 8th promoted buffer." (interactive) (skilled-buffers-secondary-switch-to-n 8))
+(defun skilled-buffers-secondary-switch-to-9 () "Switch SECONDARY to 9th promoted buffer." (interactive) (skilled-buffers-secondary-switch-to-n 9))
+
+;;; Window Focus
 
 (defun skilled-buffers-jump-to-primary ()
   "Move point/focus to PRIMARY window."
@@ -254,150 +396,275 @@ Called with numeric prefix argument."
 ;;; Buffer List Management
 
 (defun skilled-buffers-show-list ()
-  "Display the ordered list of promoted buffers."
+  "Display the ordered lists of promoted buffers for both PRIMARY and SECONDARY."
   (interactive)
-  (if (null skilled-buffers-list)
+  (if (and (null skilled-buffers-primary-list) 
+           (null skilled-buffers-secondary-list))
       (message "No promoted buffers")
-    (let ((msg (concat "Skilled Buffers:\n"
-                       (mapconcat
-                        (lambda (i)
-                          (let ((buf (nth i skilled-buffers-list)))
-                            (format "  %d. %s%s"
-                                    (1+ i)
-                                    (if (= i skilled-buffers-index) "[current] → " "")
-                                    (buffer-name buf))))
-                        (number-sequence 0 (1- (length skilled-buffers-list)))
-                        "\n"))))
+    (let ((msg "Skilled Buffers:\n\n"))
+      ;; PRIMARY list
+      (setq msg (concat msg "PRIMARY:\n"))
+      (if (null skilled-buffers-primary-list)
+          (setq msg (concat msg "  (empty)\n"))
+        (setq msg (concat msg
+                          (mapconcat
+                           (lambda (i)
+                             (let ((buf (nth i skilled-buffers-primary-list)))
+                               (format "  %d. %s%s"
+                                       (1+ i)
+                                       (if (= i skilled-buffers-primary-index) "[current] → " "")
+                                       (buffer-name buf))))
+                           (number-sequence 0 (1- (length skilled-buffers-primary-list)))
+                           "\n")
+                          "\n")))
+      
+      ;; SECONDARY list
+      (setq msg (concat msg "\nSECONDARY:\n"))
+      (if (null skilled-buffers-secondary-list)
+          (setq msg (concat msg "  (empty)\n"))
+        (setq msg (concat msg
+                          (mapconcat
+                           (lambda (i)
+                             (let ((buf (nth i skilled-buffers-secondary-list)))
+                               (format "  %d. %s%s"
+                                       (1+ i)
+                                       (if (= i skilled-buffers-secondary-index) "[current] → " "")
+                                       (buffer-name buf))))
+                           (number-sequence 0 (1- (length skilled-buffers-secondary-list)))
+                           "\n"))))
+      
       (message "%s" msg))))
 
-(defun skilled-buffers-clear ()
-  "Remove all promoted buffers from the list."
+(defun skilled-buffers-clear-primary ()
+  "Remove all promoted buffers from the PRIMARY list."
   (interactive)
-  (when (yes-or-no-p "Clear all promoted buffers? ")
-    (setq skilled-buffers-list '())
-    (setq skilled-buffers-index 0)
+  (when (yes-or-no-p "Clear all PRIMARY promoted buffers? ")
+    (setq skilled-buffers-primary-list '())
+    (setq skilled-buffers-primary-index 0)
+    (skilled-buffers--show-dashboard-in-primary)
+    (message "Cleared all PRIMARY promoted buffers")))
+
+(defun skilled-buffers-clear-secondary ()
+  "Remove all promoted buffers from the SECONDARY list."
+  (interactive)
+  (when (yes-or-no-p "Clear all SECONDARY promoted buffers? ")
+    (setq skilled-buffers-secondary-list '())
+    (setq skilled-buffers-secondary-index 0)
+    (message "Cleared all SECONDARY promoted buffers")))
+
+(defun skilled-buffers-clear ()
+  "Remove all promoted buffers from both PRIMARY and SECONDARY lists."
+  (interactive)
+  (when (yes-or-no-p "Clear all promoted buffers (PRIMARY and SECONDARY)? ")
+    (setq skilled-buffers-primary-list '())
+    (setq skilled-buffers-primary-index 0)
+    (setq skilled-buffers-secondary-list '())
+    (setq skilled-buffers-secondary-index 0)
     (skilled-buffers--show-dashboard-in-primary)
     (message "Cleared all promoted buffers")))
 
 (defun skilled-buffers-reorder-up ()
-  "Move current buffer up one position in the promoted list."
+  "Move current buffer up one position in the PRIMARY promoted list."
   (interactive)
   (let* ((buf (current-buffer))
-         (pos (cl-position buf skilled-buffers-list)))
+         (pos (cl-position buf skilled-buffers-primary-list)))
     (if (not pos)
-        (message "Buffer is not promoted")
+        (message "Buffer is not promoted to PRIMARY")
       (if (= pos 0)
-          (message "Already at top of list")
+          (message "Already at top of PRIMARY list")
         ;; Swap with previous
-        (let ((prev-buf (nth (1- pos) skilled-buffers-list)))
-          (setf (nth (1- pos) skilled-buffers-list) buf)
-          (setf (nth pos skilled-buffers-list) prev-buf)
-          (when (= skilled-buffers-index pos)
-            (setq skilled-buffers-index (1- pos)))
-          (message "Moved %s up" (buffer-name buf)))))))
+        (let ((prev-buf (nth (1- pos) skilled-buffers-primary-list)))
+          (setf (nth (1- pos) skilled-buffers-primary-list) buf)
+          (setf (nth pos skilled-buffers-primary-list) prev-buf)
+          (when (= skilled-buffers-primary-index pos)
+            (setq skilled-buffers-primary-index (1- pos)))
+          (message "Moved %s up in PRIMARY" (buffer-name buf)))))))
 
 (defun skilled-buffers-reorder-down ()
-  "Move current buffer down one position in the promoted list."
+  "Move current buffer down one position in the PRIMARY promoted list."
   (interactive)
   (let* ((buf (current-buffer))
-         (pos (cl-position buf skilled-buffers-list)))
+         (pos (cl-position buf skilled-buffers-primary-list)))
     (if (not pos)
-        (message "Buffer is not promoted")
-      (if (= pos (1- (length skilled-buffers-list)))
-          (message "Already at bottom of list")
+        (message "Buffer is not promoted to PRIMARY")
+      (if (= pos (1- (length skilled-buffers-primary-list)))
+          (message "Already at bottom of PRIMARY list")
         ;; Swap with next
-        (let ((next-buf (nth (1+ pos) skilled-buffers-list)))
-          (setf (nth (1+ pos) skilled-buffers-list) buf)
-          (setf (nth pos skilled-buffers-list) next-buf)
-          (when (= skilled-buffers-index pos)
-            (setq skilled-buffers-index (1+ pos)))
-          (message "Moved %s down" (buffer-name buf)))))))
+        (let ((next-buf (nth (1+ pos) skilled-buffers-primary-list)))
+          (setf (nth (1+ pos) skilled-buffers-primary-list) buf)
+          (setf (nth pos skilled-buffers-primary-list) next-buf)
+          (when (= skilled-buffers-primary-index pos)
+            (setq skilled-buffers-primary-index (1+ pos)))
+          (message "Moved %s down in PRIMARY" (buffer-name buf)))))))
+
+(defun skilled-buffers-secondary-reorder-up ()
+  "Move current buffer up one position in the SECONDARY promoted list."
+  (interactive)
+  (let* ((buf (current-buffer))
+         (pos (cl-position buf skilled-buffers-secondary-list)))
+    (if (not pos)
+        (message "Buffer is not promoted to SECONDARY")
+      (if (= pos 0)
+          (message "Already at top of SECONDARY list")
+        ;; Swap with previous
+        (let ((prev-buf (nth (1- pos) skilled-buffers-secondary-list)))
+          (setf (nth (1- pos) skilled-buffers-secondary-list) buf)
+          (setf (nth pos skilled-buffers-secondary-list) prev-buf)
+          (when (= skilled-buffers-secondary-index pos)
+            (setq skilled-buffers-secondary-index (1- pos)))
+          (message "Moved %s up in SECONDARY" (buffer-name buf)))))))
+
+(defun skilled-buffers-secondary-reorder-down ()
+  "Move current buffer down one position in the SECONDARY promoted list."
+  (interactive)
+  (let* ((buf (current-buffer))
+         (pos (cl-position buf skilled-buffers-secondary-list)))
+    (if (not pos)
+        (message "Buffer is not promoted to SECONDARY")
+      (if (= pos (1- (length skilled-buffers-secondary-list)))
+          (message "Already at bottom of SECONDARY list")
+        ;; Swap with next
+        (let ((next-buf (nth (1+ pos) skilled-buffers-secondary-list)))
+          (setf (nth (1+ pos) skilled-buffers-secondary-list) buf)
+          (setf (nth pos skilled-buffers-secondary-list) next-buf)
+          (when (= skilled-buffers-secondary-index pos)
+            (setq skilled-buffers-secondary-index (1+ pos)))
+          (message "Moved %s down in SECONDARY" (buffer-name buf)))))))
 
 ;;; Cleanup
 
 (defun skilled-buffers-cleanup ()
-  "Remove dead buffers from the promoted list."
-  (let ((before-count (length skilled-buffers-list)))
-    (setq skilled-buffers-list 
-          (cl-remove-if-not #'buffer-live-p skilled-buffers-list))
+  "Remove dead buffers from both PRIMARY and SECONDARY promoted lists."
+  (let ((primary-before (length skilled-buffers-primary-list))
+        (secondary-before (length skilled-buffers-secondary-list)))
     
-    ;; Adjust index if necessary
-    (when (>= skilled-buffers-index (length skilled-buffers-list))
-      (setq skilled-buffers-index (max 0 (1- (length skilled-buffers-list)))))
+    ;; Clean PRIMARY list
+    (setq skilled-buffers-primary-list 
+          (cl-remove-if-not #'buffer-live-p skilled-buffers-primary-list))
     
-    (let ((removed (- before-count (length skilled-buffers-list))))
-      (when (> removed 0)
-        (message "Removed %d dead buffer(s) from promoted list" removed)
+    ;; Adjust PRIMARY index if necessary
+    (when (>= skilled-buffers-primary-index (length skilled-buffers-primary-list))
+      (setq skilled-buffers-primary-index (max 0 (1- (length skilled-buffers-primary-list)))))
+    
+    ;; Clean SECONDARY list
+    (setq skilled-buffers-secondary-list 
+          (cl-remove-if-not #'buffer-live-p skilled-buffers-secondary-list))
+    
+    ;; Adjust SECONDARY index if necessary
+    (when (>= skilled-buffers-secondary-index (length skilled-buffers-secondary-list))
+      (setq skilled-buffers-secondary-index (max 0 (1- (length skilled-buffers-secondary-list)))))
+    
+    (let ((primary-removed (- primary-before (length skilled-buffers-primary-list)))
+          (secondary-removed (- secondary-before (length skilled-buffers-secondary-list))))
+      (when (or (> primary-removed 0) (> secondary-removed 0))
+        (message "Removed %d dead buffer(s) from PRIMARY, %d from SECONDARY" 
+                 primary-removed secondary-removed)
         
         ;; If we're in PRIMARY and current buffer was removed, show next
         (when (and (skilled-buffers--active-frame-p)
                    skilled-buffers-primary-window
                    (window-live-p skilled-buffers-primary-window)
                    (eq (selected-window) skilled-buffers-primary-window))
-          (if skilled-buffers-list
+          (if skilled-buffers-primary-list
               (skilled-buffers--display-in-primary 
-               (nth skilled-buffers-index skilled-buffers-list))
+               (nth skilled-buffers-primary-index skilled-buffers-primary-list))
             (skilled-buffers--show-dashboard-in-primary)))))))
 
 (defun skilled-buffers--kill-buffer-hook ()
   "Hook function to clean up when a buffer is killed."
-  (when (memq (current-buffer) skilled-buffers-list)
+  (when (or (memq (current-buffer) skilled-buffers-primary-list)
+            (memq (current-buffer) skilled-buffers-secondary-list))
     (skilled-buffers-cleanup)))
 
 ;;; Persistence
 
 (defun skilled-buffers-save-list ()
-  "Save the promoted buffer list to file."
+  "Save both PRIMARY and SECONDARY promoted buffer lists to file."
   (interactive)
-  (let ((buffer-file-names 
+  (let ((primary-file-names 
          (cl-remove-if #'null
                        (mapcar (lambda (buf)
                                  (buffer-file-name buf))
-                               skilled-buffers-list))))
+                               skilled-buffers-primary-list)))
+        (secondary-file-names 
+         (cl-remove-if #'null
+                       (mapcar (lambda (buf)
+                                 (buffer-file-name buf))
+                               skilled-buffers-secondary-list))))
     (with-temp-file skilled-buffers-save-file
       (insert ";; Skilled Buffers Save File\n")
       (insert ";; Auto-generated - do not edit manually\n\n")
-      (insert "(setq skilled-buffers-saved-files\n  '(")
+      (insert "(setq skilled-buffers-saved-primary-files\n  '(")
       (insert (mapconcat (lambda (f) (format "%S" f))
-                         buffer-file-names
+                         primary-file-names
+                         "\n    "))
+      (insert "))\n\n")
+      (insert "(setq skilled-buffers-saved-secondary-files\n  '(")
+      (insert (mapconcat (lambda (f) (format "%S" f))
+                         secondary-file-names
                          "\n    "))
       (insert "))\n"))
-    (message "Saved %d promoted buffer(s)" (length buffer-file-names))))
+    (message "Saved %d PRIMARY, %d SECONDARY buffer(s)" 
+             (length primary-file-names)
+             (length secondary-file-names))))
 
 (defun skilled-buffers-restore-list ()
-  "Restore the promoted buffer list from file."
+  "Restore both PRIMARY and SECONDARY promoted buffer lists from file."
   (interactive)
   (when (file-exists-p skilled-buffers-save-file)
     (load skilled-buffers-save-file t t)
-    (when (boundp 'skilled-buffers-saved-files)
-      (let ((restored 0))
-        (dolist (file skilled-buffers-saved-files)
+    (let ((primary-restored 0)
+          (secondary-restored 0))
+      
+      ;; Restore PRIMARY list
+      (when (boundp 'skilled-buffers-saved-primary-files)
+        (dolist (file skilled-buffers-saved-primary-files)
           (when (file-exists-p file)
             (let ((buf (find-file-noselect file)))
-              (unless (memq buf skilled-buffers-list)
-                (setq skilled-buffers-list 
-                      (append skilled-buffers-list (list buf)))
-                (setq restored (1+ restored))))))
-        (setq skilled-buffers-index 0)
-        (when (and (> restored 0) skilled-buffers-list)
+              (unless (memq buf skilled-buffers-primary-list)
+                (setq skilled-buffers-primary-list 
+                      (append skilled-buffers-primary-list (list buf)))
+                (setq primary-restored (1+ primary-restored))))))
+        (setq skilled-buffers-primary-index 0)
+        (when (and (> primary-restored 0) skilled-buffers-primary-list)
           (skilled-buffers--display-in-primary 
-           (car skilled-buffers-list)))
-        (message "Restored %d promoted buffer(s)" restored)))))
+           (car skilled-buffers-primary-list))))
+      
+      ;; Restore SECONDARY list
+      (when (boundp 'skilled-buffers-saved-secondary-files)
+        (dolist (file skilled-buffers-saved-secondary-files)
+          (when (file-exists-p file)
+            (let ((buf (find-file-noselect file)))
+              (unless (memq buf skilled-buffers-secondary-list)
+                (setq skilled-buffers-secondary-list 
+                      (append skilled-buffers-secondary-list (list buf)))
+                (setq secondary-restored (1+ secondary-restored))))))
+        (setq skilled-buffers-secondary-index 0))
+      
+      (when (or (> primary-restored 0) (> secondary-restored 0))
+        (message "Restored %d PRIMARY, %d SECONDARY buffer(s)" 
+                 primary-restored secondary-restored)))))
 
 ;;; Display Buffer Integration
 
 (defun skilled-buffers--display-buffer-action (buffer alist)
   "Custom display buffer action for routing buffers to correct window.
-BUFFER is the buffer to display, ALIST is the action alist."
+BUFFER is the buffer to display, ALIST is the action alist.
+
+Routing rules:
+- PRIMARY list buffers → PRIMARY window
+- SECONDARY list buffers → SECONDARY window (when explicitly switched to)
+- All other buffers → SECONDARY window (default)"
   (when (skilled-buffers--active-frame-p)
     (cond
-     ;; Promoted buffers go to PRIMARY
-     ((memq buffer skilled-buffers-list)
+     ;; PRIMARY list buffers go to PRIMARY window
+     ((memq buffer skilled-buffers-primary-list)
       (when (and skilled-buffers-primary-window
                  (window-live-p skilled-buffers-primary-window))
         (window--display-buffer buffer skilled-buffers-primary-window 'reuse alist)))
      
-     ;; Non-promoted buffers go to SECONDARY
+     ;; All other buffers (including SECONDARY list) go to SECONDARY window
+     ;; SECONDARY list buffers are shown when explicitly requested via navigation functions
      (t
       (when (and skilled-buffers-secondary-window
                  (window-live-p skilled-buffers-secondary-window))
