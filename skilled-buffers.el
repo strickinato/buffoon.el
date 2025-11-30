@@ -684,9 +684,10 @@ Routing rules:
         (add-hook 'kill-buffer-hook #'skilled-buffers--kill-buffer-hook)
         (add-hook 'kill-emacs-hook #'skilled-buffers-save-list)
         
-        ;; Add display buffer action
-        (add-to-list 'display-buffer-alist
-                     '(".*" skilled-buffers--display-buffer-action))
+        ;; Add display buffer action at the BEGINNING (highest priority)
+        ;; This ensures skilled-buffers takes precedence over other rules (magit, etc.)
+        (push '(".*" skilled-buffers--display-buffer-action)
+              display-buffer-alist)
         
         (message "Skilled buffers mode enabled"))
     
