@@ -692,19 +692,27 @@ Routing rules:
         (buffoon-setup-layout)))
     
     (when (buffoon--layout-active-p)
-      (cond
-       ;; PRIMARY list buffers go to PRIMARY window
-       ((memq buffer buffoon-primary-list)
-        (when (and buffoon-primary-window
-                   (window-live-p buffoon-primary-window))
-          (window--display-buffer buffer buffoon-primary-window 'reuse alist)))
-       
-       ;; All other buffers (including SECONDARY list) go to SECONDARY window
-       ;; SECONDARY list buffers are shown when explicitly requested via navigation functions
-       (t
-        (when (and buffoon-secondary-window
-                   (window-live-p buffoon-secondary-window))
-          (window--display-buffer buffer buffoon-secondary-window 'reuse alist)))))))
+      (let ((target-window nil))
+        (cond
+         ;; PRIMARY list buffers go to PRIMARY window
+         ((memq buffer buffoon-primary-list)
+          (when (and buffoon-primary-window
+                     (window-live-p buffoon-primary-window))
+            (setq target-window buffoon-primary-window)))
+         
+         ;; All other buffers (including SECONDARY list) go to SECONDARY window
+         ;; SECONDARY list buffers are shown when explicitly requested via navigation functions
+         (t
+          (when (and buffoon-secondary-window
+                     (window-live-p buffoon-secondary-window))
+            (setq target-window buffoon-secondary-window))))
+        
+        (when target-window
+          (let ((displayed-window (window--display-buffer buffer target-window 'reuse alist)))
+            ;; Select the window to move cursor there
+            (when displayed-window
+              (select-window displayed-window))
+            displayed-window))))))
 
 (defun buffoon--window-buffer-change-function (frame)
   "Hook function called when window buffers change.
