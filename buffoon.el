@@ -208,6 +208,15 @@ previous promoted buffer (or dashboard) in PRIMARY."
         (with-current-buffer buf
           (buffoon-demote-primary))))))
 
+(defun buffoon-toggle-promote-primary ()
+  "Toggle promotion of current buffer to PRIMARY.
+If already promoted to PRIMARY, demote it. Otherwise, promote it."
+  (interactive)
+  (let ((buf (current-buffer)))
+    (if (memq buf buffoon-primary-list)
+        (buffoon-demote-primary)
+      (buffoon-promote-primary))))
+
 ;; Backward compatibility aliases
 (defalias 'buffoon-promote 'buffoon-promote-primary)
 (defalias 'buffoon-demote 'buffoon-demote-primary)
@@ -259,6 +268,15 @@ The buffer remains visible in SECONDARY window (whatever was last there stays)."
       (when buf
         (with-current-buffer buf
           (buffoon-demote-secondary))))))
+
+(defun buffoon-toggle-promote-secondary ()
+  "Toggle promotion of current buffer to SECONDARY.
+If already promoted to SECONDARY, demote it. Otherwise, promote it."
+  (interactive)
+  (let ((buf (current-buffer)))
+    (if (memq buf buffoon-secondary-list)
+        (buffoon-demote-secondary)
+      (buffoon-promote-secondary))))
 
 (defun buffoon--display-in-primary (buffer)
   "Display BUFFER in PRIMARY window."
