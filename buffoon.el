@@ -77,6 +77,29 @@
 
 ;;; Layout Management
 
+(defun buffoon--layout-active-p ()
+  "Return t if the buffoon layout is currently active."
+  (and buffoon-frame
+       (eq buffoon-frame (selected-frame))
+       buffoon-primary-window
+       (window-live-p buffoon-primary-window)
+       buffoon-secondary-window
+       (window-live-p buffoon-secondary-window)))
+
+(defun buffoon--dashboard-buffer-p (buffer)
+  "Return t if BUFFER is the dashboard buffer."
+  (and buffer
+       (buffer-live-p buffer)
+       (string= (buffer-name buffer) buffoon-dashboard-buffer-name)))
+
+(defun buffoon--should-auto-promote-p (buffer)
+  "Return t if BUFFER should trigger auto-promotion and lazy layout creation."
+  (and buffer
+       (buffer-live-p buffer)
+       (not (buffoon--dashboard-buffer-p buffer))
+       (null buffoon-primary-list)  ; Only for the first buffer
+       (null buffoon-secondary-list)))
+
 (defun buffoon-setup-layout ()
   "Initialize the dual-window layout with PRIMARY (left) and SECONDARY (right).
 Creates a 50/50 vertical split and stores window references."
@@ -94,6 +117,9 @@ Creates a 50/50 vertical split and stores window references."
   ;; Show dashboard in PRIMARY if no promoted buffers
   (when (null buffoon-primary-list)
     (buffoon--show-dashboard-in-primary))
+  
+  ;; Setup tab-line for both windows
+  (buffoon--setup-tab-line)
   
   (message "Skilled buffers layout initialized"))
 
@@ -244,13 +270,17 @@ The buffer remains visible in SECONDARY window (whatever was last there stays)."
       (switch-to-buffer buffer))))
 
 (defun buffoon--display-in-secondary (buffer)
-  "Display BUFFER in SECONDARY window."
-  (when (and (buffoon--active-frame-p)
-             buffoon-secondary-window
-             (window-live-p buffoon-secondary-window)
-             (buffer-live-p buffer))
-    (with-selected-window buffoon-secondary-window
-      (switch-to-buffer buffer))))
+  "Display BUFFER in SECONDARY window.
+If SECONDARY window doesn't exist, create the layout first."
+  (when (and buffoon-mode (buffer-live-p buffer))
+    ;; Ensure layout exists
+    (unless (buffoon--layout-active-p)
+      (buffoon-setup-layout))
+    
+    (when (and buffoon-secondary-window
+               (window-live-p buffoon-secondary-window))
+      (with-selected-window buffoon-secondary-window
+        (switch-to-buffer buffer)))))
 
 ;;; Navigation - PRIMARY
 
@@ -652,66 +682,92 @@ Routing rules:
 - PRIMARY list buffers → PRIMARY window
 - SECONDARY list buffers → SECONDARY window (when explicitly switched to)
 - All other buffers → SECONDARY window (default)"
-  (when (buffoon--active-frame-p)
-    (cond
-     ;; PRIMARY list buffers go to PRIMARY window
-     ((memq buffer buffoon-primary-list)
-      (when (and buffoon-primary-window
-                 (window-live-p buffoon-primary-window))
-        (window--display-buffer buffer buffoon-primary-window 'reuse alist)))
-     
-     ;; All other buffers (including SECONDARY list) go to SECONDARY window
-     ;; SECONDARY list buffers are shown when explicitly requested via navigation functions
-     (t
-      (when (and buffoon-secondary-window
-                 (window-live-p buffoon-secondary-window))
-        (window--display-buffer buffer buffoon-secondary-window 'reuse alist))))))
+  (when buffoon-mode
+    ;; Ensure layout exists if we have any buffers to route
+    (unless (buffoon--layout-active-p)
+      (when (or (memq buffer buffoon-primary-list)
+                (memq buffer buffoon-secondary-list)
+                (and (not (buffoon--dashboard-buffer-p buffer))
+                     (or buffoon-primary-list buffoon-secondary-list)))
+        (buffoon-setup-layout)))
+    
+    (when (buffoon--layout-active-p)
+      (cond
+       ;; PRIMARY list buffers go to PRIMARY window
+       ((memq buffer buffoon-primary-list)
+        (when (and buffoon-primary-window
+                   (window-live-p buffoon-primary-window))
+          (window--display-buffer buffer buffoon-primary-window 'reuse alist)))
+       
+       ;; All other buffers (including SECONDARY list) go to SECONDARY window
+       ;; SECONDARY list buffers are shown when explicitly requested via navigation functions
+       (t
+        (when (and buffoon-secondary-window
+                   (window-live-p buffoon-secondary-window))
+          (window--display-buffer buffer buffoon-secondary-window 'reuse alist)))))))
 
 (defun buffoon--window-buffer-change-function (frame)
   "Hook function called when window buffers change.
 Ensures buffers are displayed in the correct window according to promotion rules.
 This catches ALL methods of opening/switching buffers (projectile, find-file, etc)."
-  (when (and (eq frame buffoon-frame)
-             (buffoon--active-frame-p))
-    (let ((primary-buffer (when (and buffoon-primary-window
-                                     (window-live-p buffoon-primary-window))
-                            (window-buffer buffoon-primary-window)))
-          (secondary-buffer (when (and buffoon-secondary-window
-                                       (window-live-p buffoon-secondary-window))
-                              (window-buffer buffoon-secondary-window))))
+  (when (eq frame (selected-frame))
+    (let ((current-buffer (window-buffer (selected-window))))
       
-      ;; Check if PRIMARY window has a buffer that shouldn't be there
-      (when (and primary-buffer
-                 (not (memq primary-buffer buffoon-primary-list)))
-        ;; Move this buffer to SECONDARY
-        (when (and buffoon-secondary-window
-                   (window-live-p buffoon-secondary-window))
-          (set-window-buffer buffoon-secondary-window primary-buffer))
-        ;; Show appropriate buffer in PRIMARY
-        (if buffoon-primary-list
-            (set-window-buffer buffoon-primary-window
-                               (nth buffoon-primary-index buffoon-primary-list))
-          (buffoon--show-dashboard-in-primary)))
+      ;; Check if this is the first non-dashboard buffer and we should auto-promote
+      (when (and buffoon-mode
+                 (buffoon--should-auto-promote-p current-buffer))
+        ;; Setup layout if not already active
+        (unless (buffoon--layout-active-p)
+          (buffoon-setup-layout))
+        ;; Auto-promote this buffer to PRIMARY
+        (with-current-buffer current-buffer
+          (buffoon-promote-primary)))
       
-      ;; Check if SECONDARY window has a PRIMARY buffer that should be in PRIMARY
-      (when (and secondary-buffer
-                 (memq secondary-buffer buffoon-primary-list))
-        ;; This buffer belongs in PRIMARY
-        (when (and buffoon-primary-window
-                   (window-live-p buffoon-primary-window))
-          (set-window-buffer buffoon-primary-window secondary-buffer)
-          ;; Update PRIMARY index to match
-          (let ((idx (cl-position secondary-buffer buffoon-primary-list)))
-            (when idx
-              (setq buffoon-primary-index idx)))
-          ;; Show previous SECONDARY buffer or a SECONDARY promoted buffer
-          (when (and buffoon-secondary-window
-                     (window-live-p buffoon-secondary-window))
-            (if buffoon-secondary-list
-                (set-window-buffer buffoon-secondary-window
-                                   (nth buffoon-secondary-index buffoon-secondary-list))
-              ;; Just leave whatever was there before in SECONDARY
-              nil)))))))
+      ;; Only do the rest if layout is active
+      (when (buffoon--layout-active-p)
+        ;; Ensure SECONDARY window exists for buffers that need it
+        (unless (buffoon--layout-active-p)
+          (buffoon-setup-layout))
+        
+        (let ((primary-buffer (when (and buffoon-primary-window
+                                         (window-live-p buffoon-primary-window))
+                                (window-buffer buffoon-primary-window)))
+              (secondary-buffer (when (and buffoon-secondary-window
+                                           (window-live-p buffoon-secondary-window))
+                                  (window-buffer buffoon-secondary-window))))
+          
+          ;; Check if PRIMARY window has a buffer that shouldn't be there
+          (when (and primary-buffer
+                     (not (memq primary-buffer buffoon-primary-list)))
+            ;; Move this buffer to SECONDARY
+            (when (and buffoon-secondary-window
+                       (window-live-p buffoon-secondary-window))
+              (set-window-buffer buffoon-secondary-window primary-buffer))
+            ;; Show appropriate buffer in PRIMARY
+            (if buffoon-primary-list
+                (set-window-buffer buffoon-primary-window
+                                   (nth buffoon-primary-index buffoon-primary-list))
+              (buffoon--show-dashboard-in-primary)))
+          
+          ;; Check if SECONDARY window has a PRIMARY buffer that should be in PRIMARY
+          (when (and secondary-buffer
+                     (memq secondary-buffer buffoon-primary-list))
+            ;; This buffer belongs in PRIMARY
+            (when (and buffoon-primary-window
+                       (window-live-p buffoon-primary-window))
+              (set-window-buffer buffoon-primary-window secondary-buffer)
+              ;; Update PRIMARY index to match
+              (let ((idx (cl-position secondary-buffer buffoon-primary-list)))
+                (when idx
+                  (setq buffoon-primary-index idx)))
+              ;; Show previous SECONDARY buffer or a SECONDARY promoted buffer
+              (when (and buffoon-secondary-window
+                         (window-live-p buffoon-secondary-window))
+                (if buffoon-secondary-list
+                    (set-window-buffer buffoon-secondary-window
+                                       (nth buffoon-secondary-index buffoon-secondary-list))
+                  ;; Just leave whatever was there before in SECONDARY
+                  nil)))))))))
 
 ;;; Tab Line Integration
 
@@ -848,8 +904,12 @@ This catches ALL methods of opening/switching buffers (projectile, find-file, et
         (push '("^.*" buffoon--display-buffer-action)
               display-buffer-alist)
         
-        ;; Setup tab-line
-        (buffoon--setup-tab-line)
+        ;; Don't setup layout automatically - it will be created lazily
+        ;; when the first non-dashboard buffer is opened
+        
+        ;; If layout is already active, setup tab-line now
+        (when (buffoon--layout-active-p)
+          (buffoon--setup-tab-line))
         
         (message "Skilled buffers mode enabled"))
     
