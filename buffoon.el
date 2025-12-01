@@ -683,12 +683,14 @@ Routing rules:
 - SECONDARY list buffers → SECONDARY window (when explicitly switched to)
 - All other buffers → SECONDARY window (default)"
   (when buffoon-mode
-    ;; Ensure layout exists if we have any buffers to route
+    ;; Ensure layout exists - recreate if disrupted
     (unless (buffoon--layout-active-p)
+      ;; Recreate layout if we have promoted buffers OR if this is a non-dashboard buffer
       (when (or (memq buffer buffoon-primary-list)
                 (memq buffer buffoon-secondary-list)
-                (and (not (buffoon--dashboard-buffer-p buffer))
-                     (or buffoon-primary-list buffoon-secondary-list)))
+                buffoon-primary-list
+                buffoon-secondary-list
+                (not (buffoon--dashboard-buffer-p buffer)))
         (buffoon-setup-layout)))
     
     (when (buffoon--layout-active-p)
@@ -731,12 +733,29 @@ This catches ALL methods of opening/switching buffers (projectile, find-file, et
         (with-current-buffer current-buffer
           (buffoon-promote-primary)))
       
-      ;; Only do the rest if layout is active
+      ;; Recreate layout ONLY if trying to show a buffer that should be in SECONDARY
+      (when (and buffoon-mode
+                 (not (buffoon--layout-active-p)))
+        ;; Only recreate if the current buffer actually needs SECONDARY
+        ;; (i.e., it's not in PRIMARY list and not the dashboard)
+        (when (and (not (memq current-buffer buffoon-primary-list))
+                   (not (buffoon--dashboard-buffer-p current-buffer)))
+          (buffoon-setup-layout)
+          ;; After creating layout, immediately move the buffer to SECONDARY
+          (when (and buffoon-secondary-window
+                     (window-live-p buffoon-secondary-window))
+            (set-window-buffer buffoon-secondary-window current-buffer)
+            (select-window buffoon-secondary-window))
+          ;; Ensure PRIMARY shows the correct buffer (not the preview buffer)
+          (when (and buffoon-primary-window
+                     (window-live-p buffoon-primary-window))
+            (if buffoon-primary-list
+                (set-window-buffer buffoon-primary-window
+                                   (nth buffoon-primary-index buffoon-primary-list))
+              (buffoon--show-dashboard-in-primary)))))
+      
+      ;; Only do routing if layout is active
       (when (buffoon--layout-active-p)
-        ;; Ensure SECONDARY window exists for buffers that need it
-        (unless (buffoon--layout-active-p)
-          (buffoon-setup-layout))
-        
         (let ((primary-buffer (when (and buffoon-primary-window
                                          (window-live-p buffoon-primary-window))
                                 (window-buffer buffoon-primary-window)))
@@ -745,8 +764,10 @@ This catches ALL methods of opening/switching buffers (projectile, find-file, et
                                   (window-buffer buffoon-secondary-window))))
           
           ;; Check if PRIMARY window has a buffer that shouldn't be there
+          ;; (but skip if we just created the layout - we already handled it above)
           (when (and primary-buffer
-                     (not (memq primary-buffer buffoon-primary-list)))
+                     (not (memq primary-buffer buffoon-primary-list))
+                     (not (eq primary-buffer current-buffer)))
             ;; Move this buffer to SECONDARY
             (when (and buffoon-secondary-window
                        (window-live-p buffoon-secondary-window))
@@ -894,6 +915,16 @@ This catches ALL methods of opening/switching buffers (projectile, find-file, et
             (setq-local tab-line-new-button-show nil))
           (force-mode-line-update))))))
 
+;;; Consult-Buffer Advice
+
+(defun buffoon--consult-buffer-advice (&rest _args)
+  "Advice for consult-buffer to ensure layout exists before previewing.
+This ensures the split is created before the first preview."
+  (when buffoon-mode
+    ;; If layout is not active, create it proactively
+    (unless (buffoon--layout-active-p)
+      (buffoon-setup-layout))))
+
 ;;; Minor Mode
 
 ;;;###autoload
@@ -919,6 +950,10 @@ This catches ALL methods of opening/switching buffers (projectile, find-file, et
         (push '("^.*" buffoon--display-buffer-action)
               display-buffer-alist)
         
+        ;; Add advice to consult-buffer to ensure layout exists before previewing
+        (when (fboundp 'consult-buffer)
+          (advice-add 'consult-buffer :before #'buffoon--consult-buffer-advice))
+        
         ;; Don't setup layout automatically - it will be created lazily
         ;; when the first non-dashboard buffer is opened
         
@@ -929,6 +964,8 @@ This catches ALL methods of opening/switching buffers (projectile, find-file, et
         (message "Skilled buffers mode enabled"))
     
     ;; Disable
+    (when (fboundp 'consult-buffer)
+      (advice-remove 'consult-buffer #'buffoon--consult-buffer-advice))
     (remove-hook 'kill-buffer-hook #'buffoon--kill-buffer-hook)
     (remove-hook 'kill-emacs-hook #'buffoon-save-list)
     (remove-hook 'buffer-list-update-hook #'buffoon--update-tab-line)
