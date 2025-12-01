@@ -3,3 +3,12 @@
 
 - https://github.com/kiwanami/emacs-window-manager
 - https://github.com/bmag/emacs-purpose/
+- https://gitlab.com/axgfn/edwina
+
+** This is in violation of so many of the things described here:
+  https://www.gnu.org/software/emacs/manual/html_node/elisp/The-Zen-of-Buffer-Display.html
+  
+** And someone is likely to get much better results following suggestions here:
+
+https://karthinks.com/software/emacs-window-management-almanac/
+
