@@ -692,6 +692,114 @@ Routes buffers according to skilled-buffers rules when active."
                    (not (eq (selected-window) skilled-buffers-secondary-window)))
           (select-window skilled-buffers-secondary-window)))))))
 
+;;; Tab Line Integration
+
+(defface skilled-buffers-tab-selected
+  '((t :inherit tab-line-tab-current
+     :box (:line-width 2 :color nil :style nil)))
+  "Face for selected tab in skilled-buffers."
+  :group 'skilled-buffers)
+
+(defface skilled-buffers-tab-unselected
+  '((t :inherit tab-line-tab-inactive
+     :box (:line-width 1 :color nil :style nil)))
+  "Face for unselected tabs in skilled-buffers."
+  :group 'skilled-buffers)
+
+(defface skilled-buffers-tab-ephemeral
+  '((t :inherit tab-line-tab-inactive
+     :slant italic
+     :box (:line-width 1 :color nil :style nil)))
+  "Face for ephemeral tabs (current buffer not in promoted list) in skilled-buffers."
+  :group 'skilled-buffers)
+
+(defun skilled-buffers--tab-line-tabs ()
+  "Generate tab list for current window based on PRIMARY or SECONDARY list."
+  (when (skilled-buffers--active-frame-p)
+    (let* ((current-window (selected-window))
+           (current-buffer (window-buffer current-window))
+           (is-primary (eq current-window skilled-buffers-primary-window))
+           (is-secondary (eq current-window skilled-buffers-secondary-window))
+           (buffer-list (cond
+                         (is-primary skilled-buffers-primary-list)
+                         (is-secondary skilled-buffers-secondary-list)
+                         (t nil))))
+      (when (or is-primary is-secondary)
+        ;; Show promoted buffers as tabs
+        (let ((tabs (mapcar (lambda (buf)
+                              `(tab
+                                (name . ,(buffer-name buf))
+                                (buffer . ,buf)
+                                (selected . ,(eq buf current-buffer))))
+                            (cl-remove-if-not #'buffer-live-p buffer-list))))
+          ;; If in SECONDARY and current buffer is not in the list, add ephemeral tab
+          (when (and is-secondary
+                     (not (memq current-buffer skilled-buffers-secondary-list))
+                     (buffer-live-p current-buffer))
+            (setq tabs (append tabs
+                               `((tab
+                                  (name . ,(buffer-name current-buffer))
+                                  (buffer . ,current-buffer)
+                                  (selected . t)
+                                  (ephemeral . t))))))
+          tabs)))))
+
+(defun skilled-buffers--tab-line-tab-name-function (tab tabs)
+  "Format a single tab for display. No close button."
+  (let* ((buffer (alist-get 'buffer tab))
+         (name (alist-get 'name tab))
+         (selected (alist-get 'selected tab))
+         (ephemeral (alist-get 'ephemeral tab))
+         (face (cond
+                (ephemeral 'skilled-buffers-tab-ephemeral)
+                (selected 'skilled-buffers-tab-selected)
+                (t 'skilled-buffers-tab-unselected))))
+    (propertize (concat " " name " ")
+                'face face
+                'mouse-face 'tab-line-highlight
+                'keymap (let ((map (make-sparse-keymap)))
+                          (define-key map [tab-line mouse-1]
+                                      `(lambda () (interactive)
+                                         (when (buffer-live-p ,buffer)
+                                           (switch-to-buffer ,buffer))))
+                          map))))
+
+(defun skilled-buffers--setup-tab-line ()
+  "Setup tab-line for skilled-buffers windows."
+  (when (skilled-buffers--active-frame-p)
+    ;; Enable tab-line in PRIMARY window
+    (when (and skilled-buffers-primary-window
+               (window-live-p skilled-buffers-primary-window))
+      (with-selected-window skilled-buffers-primary-window
+        (setq-local tab-line-tabs-function #'skilled-buffers--tab-line-tabs)
+        (setq-local tab-line-tab-name-function #'skilled-buffers--tab-line-tab-name-function)
+        (setq-local tab-line-close-button-show nil)
+        (setq-local tab-line-new-button-show nil)
+        (tab-line-mode 1)))
+    
+    ;; Enable tab-line in SECONDARY window
+    (when (and skilled-buffers-secondary-window
+               (window-live-p skilled-buffers-secondary-window))
+      (with-selected-window skilled-buffers-secondary-window
+        (setq-local tab-line-tabs-function #'skilled-buffers--tab-line-tabs)
+        (setq-local tab-line-tab-name-function #'skilled-buffers--tab-line-tab-name-function)
+        (setq-local tab-line-close-button-show nil)
+        (setq-local tab-line-new-button-show nil)
+        (tab-line-mode 1)))))
+
+(defun skilled-buffers--update-tab-line ()
+  "Force update of tab-line display in both windows."
+  (when (skilled-buffers--active-frame-p)
+    (dolist (win (list skilled-buffers-primary-window skilled-buffers-secondary-window))
+      (when (and win (window-live-p win))
+        (with-selected-window win
+          (when tab-line-mode
+            (setq-local tab-line-tabs-function #'skilled-buffers--tab-line-tabs)
+            (setq-local tab-line-tab-name-function #'skilled-buffers--tab-line-tab-name-function)
+            (setq-local tab-line-close-button-show nil)
+            (setq-local tab-line-new-button-show nil))
+          (force-mode-line-update))))))
+
 ;;; Minor Mode
 
 ;;;###autoload
@@ -705,6 +813,7 @@ Routes buffers according to skilled-buffers rules when active."
         ;; Enable
         (add-hook 'kill-buffer-hook #'skilled-buffers--kill-buffer-hook)
         (add-hook 'kill-emacs-hook #'skilled-buffers-save-list)
+        (add-hook 'buffer-list-update-hook #'skilled-buffers--update-tab-line)
         
         ;; Add display buffer action at the BEGINNING (highest priority)
         ;; This ensures skilled-buffers takes precedence over other rules (magit, etc.)
@@ -715,11 +824,15 @@ Routes buffers according to skilled-buffers rules when active."
         ;; Add advice to switch-to-buffer to intercept manual buffer switches
         (advice-add 'switch-to-buffer :before #'skilled-buffers--switch-to-buffer-advice)
         
+        ;; Setup tab-line
+        (skilled-buffers--setup-tab-line)
+        
         (message "Skilled buffers mode enabled"))
     
     ;; Disable
     (remove-hook 'kill-buffer-hook #'skilled-buffers--kill-buffer-hook)
     (remove-hook 'kill-emacs-hook #'skilled-buffers-save-list)
+    (remove-hook 'buffer-list-update-hook #'skilled-buffers--update-tab-line)
     
     ;; Remove display buffer action
     (setq display-buffer-alist
@@ -729,6 +842,16 @@ Routes buffers according to skilled-buffers rules when active."
     
     ;; Remove advice
     (advice-remove 'switch-to-buffer #'skilled-buffers--switch-to-buffer-advice)
+    
+    ;; Disable tab-line in both windows
+    (when (and skilled-buffers-primary-window
+               (window-live-p skilled-buffers-primary-window))
+      (with-selected-window skilled-buffers-primary-window
+        (tab-line-mode -1)))
+    (when (and skilled-buffers-secondary-window
+               (window-live-p skilled-buffers-secondary-window))
+      (with-selected-window skilled-buffers-secondary-window
+        (tab-line-mode -1)))
     
     (message "Skilled buffers mode disabled")))
 
