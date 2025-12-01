@@ -121,7 +121,7 @@ Creates a 50/50 vertical split and stores window references."
   ;; Setup tab-line for both windows
   (buffoon--setup-tab-line)
   
-  (message "Skilled buffers layout initialized"))
+  (message "Buffoon layout initialized"))
 
 (defun buffoon-ensure-layout ()
   "Manually restore the dual-window layout if it has been disrupted.
@@ -221,10 +221,7 @@ If already promoted to PRIMARY, demote it. Otherwise, promote it."
         (buffoon-demote-primary)
       (buffoon-promote-primary))))
 
-;; Backward compatibility aliases
-(defalias 'buffoon-promote 'buffoon-promote-primary)
-(defalias 'buffoon-demote 'buffoon-demote-primary)
-(defalias 'buffoon-demote-by-name 'buffoon-demote-primary-by-name)
+
 
 ;;; Buffer Promotion - SECONDARY
 
@@ -454,7 +451,7 @@ Called with numeric prefix argument."
   (if (and (null buffoon-primary-list) 
            (null buffoon-secondary-list))
       (message "No promoted buffers")
-    (let ((msg "Skilled Buffers:\n\n"))
+    (let ((msg "Buffoon Promoted Buffers:\n\n"))
       ;; PRIMARY list
       (setq msg (concat msg "PRIMARY:\n"))
       (if (null buffoon-primary-list)
@@ -645,7 +642,7 @@ Called with numeric prefix argument."
                                  (buffer-file-name buf))
                                buffoon-secondary-list))))
     (with-temp-file buffoon-save-file
-      (insert ";; Skilled Buffers Save File\n")
+      (insert ";; Buffoon Save File\n")
       (insert ";; Auto-generated - do not edit manually\n\n")
       (insert "(setq buffoon-saved-primary-files\n  '(")
       (insert (mapconcat (lambda (f) (format "%S" f))
@@ -958,7 +955,7 @@ This ensures the split is created before the first preview."
   "Toggle buffoon dual-window management system."
   :global t
   :group 'buffoon
-  :lighter " Skilled"
+  :lighter " Buffoon"
   (if buffoon-mode
       (progn
         ;; Enable
@@ -987,7 +984,7 @@ This ensures the split is created before the first preview."
         (when (buffoon--layout-active-p)
           (buffoon--setup-tab-line))
         
-        (message "Skilled buffers mode enabled"))
+        (message "Buffoon mode enabled"))
     
     ;; Disable
     (when (fboundp 'consult-buffer)
@@ -1014,7 +1011,7 @@ This ensures the split is created before the first preview."
         (with-selected-window buffoon-secondary-window
           (tab-line-mode -1))))
     
-    (message "Skilled buffers mode disabled")))
+    (message "Buffoon mode disabled")))
 
 (provide 'buffoon)
 ;;; buffoon.el ends here
