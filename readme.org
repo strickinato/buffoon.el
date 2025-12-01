@@ -1,0 +1,5 @@
+* Inspo
+
+
+- https://github.com/kiwanami/emacs-window-manager
+- https://github.com/bmag/emacs-purpose/
