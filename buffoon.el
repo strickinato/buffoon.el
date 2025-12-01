@@ -767,7 +767,13 @@ This catches ALL methods of opening/switching buffers (projectile, find-file, et
                     (set-window-buffer buffoon-secondary-window
                                        (nth buffoon-secondary-index buffoon-secondary-list))
                   ;; Just leave whatever was there before in SECONDARY
-                  nil)))))))))
+                  nil))))
+          
+          ;; Ensure tab-line is setup for buffers in both windows
+          (when (and (fboundp 'tab-line-mode) primary-buffer)
+            (buffoon--setup-buffer-tab-line primary-buffer))
+          (when (and (fboundp 'tab-line-mode) secondary-buffer)
+            (buffoon--setup-buffer-tab-line secondary-buffer)))))))
 
 ;;; Tab Line Integration
 
@@ -841,29 +847,30 @@ This catches ALL methods of opening/switching buffers (projectile, find-file, et
                                            (switch-to-buffer ,buffer))))
                           map))))
 
+(defun buffoon--setup-buffer-tab-line (buffer)
+  "Setup tab-line for BUFFER when displayed in a buffoon window."
+  (when (and (buffer-live-p buffer)
+             (fboundp 'tab-line-mode))
+    (with-current-buffer buffer
+      (setq-local tab-line-tabs-function #'buffoon--tab-line-tabs)
+      (setq-local tab-line-tab-name-function #'buffoon--tab-line-tab-name-function)
+      (setq-local tab-line-close-button-show nil)
+      (setq-local tab-line-new-button-show nil)
+      (tab-line-mode 1))))
+
 (defun buffoon--setup-tab-line ()
   "Setup tab-line for buffoon windows."
   (when (and (buffoon--active-frame-p)
              (fboundp 'tab-line-mode))
-    ;; Enable tab-line in PRIMARY window
+    ;; Enable tab-line in PRIMARY window buffer
     (when (and buffoon-primary-window
                (window-live-p buffoon-primary-window))
-      (with-selected-window buffoon-primary-window
-        (setq-local tab-line-tabs-function #'buffoon--tab-line-tabs)
-        (setq-local tab-line-tab-name-function #'buffoon--tab-line-tab-name-function)
-        (setq-local tab-line-close-button-show nil)
-        (setq-local tab-line-new-button-show nil)
-        (tab-line-mode 1)))
+      (buffoon--setup-buffer-tab-line (window-buffer buffoon-primary-window)))
     
-    ;; Enable tab-line in SECONDARY window
+    ;; Enable tab-line in SECONDARY window buffer
     (when (and buffoon-secondary-window
                (window-live-p buffoon-secondary-window))
-      (with-selected-window buffoon-secondary-window
-        (setq-local tab-line-tabs-function #'buffoon--tab-line-tabs)
-        (setq-local tab-line-tab-name-function #'buffoon--tab-line-tab-name-function)
-        (setq-local tab-line-close-button-show nil)
-        (setq-local tab-line-new-button-show nil)
-        (tab-line-mode 1)))))
+      (buffoon--setup-buffer-tab-line (window-buffer buffoon-secondary-window)))))
 
 (defun buffoon--update-tab-line ()
   "Force update of tab-line display in both windows."
