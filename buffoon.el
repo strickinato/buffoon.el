@@ -157,8 +157,12 @@ Buffers can be in both PRIMARY and SECONDARY lists."
       (setq buffoon-primary-list (append buffoon-primary-list (list buf)))
       (setq buffoon-primary-index (1- (length buffoon-primary-list)))
       
-      ;; Display in PRIMARY
+      ;; Display in PRIMARY and follow the buffer
       (buffoon--display-in-primary buf)
+      ;; Ensure cursor follows to PRIMARY window
+      (when (and buffoon-primary-window
+                 (window-live-p buffoon-primary-window))
+        (select-window buffoon-primary-window))
       
       (message "Promoted to PRIMARY: %s" (buffer-name buf)))))
 
@@ -177,22 +181,22 @@ previous promoted buffer (or dashboard) in PRIMARY."
       (when (>= buffoon-primary-index (length buffoon-primary-list))
         (setq buffoon-primary-index (max 0 (1- (length buffoon-primary-list)))))
       
-      ;; If we're in PRIMARY, move buffer to SECONDARY
+      ;; If we're in PRIMARY, move buffer to SECONDARY and follow it
       (when (and (buffoon--active-frame-p)
                  buffoon-primary-window
                  (window-live-p buffoon-primary-window)
                  (eq (selected-window) buffoon-primary-window))
-        ;; Show buffer in SECONDARY
-        (when (and buffoon-secondary-window
-                   (window-live-p buffoon-secondary-window))
-          (with-selected-window buffoon-secondary-window
-            (switch-to-buffer buf)))
-        
         ;; Show next promoted buffer in PRIMARY (or dashboard)
         (if buffoon-primary-list
             (buffoon--display-in-primary 
              (nth buffoon-primary-index buffoon-primary-list))
-          (buffoon--show-dashboard-in-primary)))
+          (buffoon--show-dashboard-in-primary))
+        
+        ;; Show buffer in SECONDARY and select that window (follow the buffer)
+        (when (and buffoon-secondary-window
+                   (window-live-p buffoon-secondary-window))
+          (select-window buffoon-secondary-window)
+          (switch-to-buffer buf)))
       
       (message "Demoted from PRIMARY: %s" (buffer-name buf)))))
 
@@ -236,8 +240,12 @@ Buffers can be in both PRIMARY and SECONDARY lists."
       (setq buffoon-secondary-list (append buffoon-secondary-list (list buf)))
       (setq buffoon-secondary-index (1- (length buffoon-secondary-list)))
       
-      ;; Display in SECONDARY
+      ;; Display in SECONDARY and follow the buffer
       (buffoon--display-in-secondary buf)
+      ;; Ensure cursor follows to SECONDARY window
+      (when (and buffoon-secondary-window
+                 (window-live-p buffoon-secondary-window))
+        (select-window buffoon-secondary-window))
       
       (message "Promoted to SECONDARY: %s" (buffer-name buf)))))
 
