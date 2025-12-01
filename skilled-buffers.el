@@ -32,6 +32,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'tab-line nil t)  ; Load tab-line if available, don't error if missing
 
 ;;; Customization
 
@@ -73,10 +74,6 @@
 
 (defvar skilled-buffers-frame nil
   "The frame where skilled-buffers layout is active.")
-
-;; Backward compatibility aliases
-(defvaralias 'skilled-buffers-list 'skilled-buffers-primary-list)
-(defvaralias 'skilled-buffers-index 'skilled-buffers-primary-index)
 
 ;;; Layout Management
 
@@ -670,27 +667,51 @@ Routing rules:
                  (window-live-p skilled-buffers-secondary-window))
         (window--display-buffer buffer skilled-buffers-secondary-window 'reuse alist))))))
 
-(defun skilled-buffers--switch-to-buffer-advice (buffer-or-name &optional norecord force-same-window)
-  "Advice for `switch-to-buffer' to route buffers to correct window.
-Routes buffers according to skilled-buffers rules when active."
-  (when (skilled-buffers--active-frame-p)
-    (let* ((buffer (window-normalize-buffer-to-switch-to buffer-or-name))
-           (in-primary-list (memq buffer skilled-buffers-primary-list)))
-      ;; Select the appropriate window before the actual switch happens
-      (cond
-       ;; If buffer is in PRIMARY list, ensure we're in PRIMARY window
-       (in-primary-list
-        (when (and skilled-buffers-primary-window
-                   (window-live-p skilled-buffers-primary-window)
-                   (not (eq (selected-window) skilled-buffers-primary-window)))
-          (select-window skilled-buffers-primary-window)))
-       
-       ;; Otherwise, ensure we're in SECONDARY window
-       (t
+(defun skilled-buffers--window-buffer-change-function (frame)
+  "Hook function called when window buffers change.
+Ensures buffers are displayed in the correct window according to promotion rules.
+This catches ALL methods of opening/switching buffers (projectile, find-file, etc)."
+  (when (and (eq frame skilled-buffers-frame)
+             (skilled-buffers--active-frame-p))
+    (let ((primary-buffer (when (and skilled-buffers-primary-window
+                                     (window-live-p skilled-buffers-primary-window))
+                            (window-buffer skilled-buffers-primary-window)))
+          (secondary-buffer (when (and skilled-buffers-secondary-window
+                                       (window-live-p skilled-buffers-secondary-window))
+                              (window-buffer skilled-buffers-secondary-window))))
+      
+      ;; Check if PRIMARY window has a buffer that shouldn't be there
+      (when (and primary-buffer
+                 (not (memq primary-buffer skilled-buffers-primary-list)))
+        ;; Move this buffer to SECONDARY
         (when (and skilled-buffers-secondary-window
-                   (window-live-p skilled-buffers-secondary-window)
-                   (not (eq (selected-window) skilled-buffers-secondary-window)))
-          (select-window skilled-buffers-secondary-window)))))))
+                   (window-live-p skilled-buffers-secondary-window))
+          (set-window-buffer skilled-buffers-secondary-window primary-buffer))
+        ;; Show appropriate buffer in PRIMARY
+        (if skilled-buffers-primary-list
+            (set-window-buffer skilled-buffers-primary-window
+                               (nth skilled-buffers-primary-index skilled-buffers-primary-list))
+          (skilled-buffers--show-dashboard-in-primary)))
+      
+      ;; Check if SECONDARY window has a PRIMARY buffer that should be in PRIMARY
+      (when (and secondary-buffer
+                 (memq secondary-buffer skilled-buffers-primary-list))
+        ;; This buffer belongs in PRIMARY
+        (when (and skilled-buffers-primary-window
+                   (window-live-p skilled-buffers-primary-window))
+          (set-window-buffer skilled-buffers-primary-window secondary-buffer)
+          ;; Update PRIMARY index to match
+          (let ((idx (cl-position secondary-buffer skilled-buffers-primary-list)))
+            (when idx
+              (setq skilled-buffers-primary-index idx)))
+          ;; Show previous SECONDARY buffer or a SECONDARY promoted buffer
+          (when (and skilled-buffers-secondary-window
+                     (window-live-p skilled-buffers-secondary-window))
+            (if skilled-buffers-secondary-list
+                (set-window-buffer skilled-buffers-secondary-window
+                                   (nth skilled-buffers-secondary-index skilled-buffers-secondary-list))
+              ;; Just leave whatever was there before in SECONDARY
+              nil)))))))
 
 ;;; Tab Line Integration
 
@@ -766,7 +787,8 @@ Routes buffers according to skilled-buffers rules when active."
 
 (defun skilled-buffers--setup-tab-line ()
   "Setup tab-line for skilled-buffers windows."
-  (when (skilled-buffers--active-frame-p)
+  (when (and (skilled-buffers--active-frame-p)
+             (fboundp 'tab-line-mode))
     ;; Enable tab-line in PRIMARY window
     (when (and skilled-buffers-primary-window
                (window-live-p skilled-buffers-primary-window))
@@ -789,7 +811,8 @@ Routes buffers according to skilled-buffers rules when active."
 
 (defun skilled-buffers--update-tab-line ()
   "Force update of tab-line display in both windows."
-  (when (skilled-buffers--active-frame-p)
+  (when (and (skilled-buffers--active-frame-p)
+             (fboundp 'tab-line-mode))
     (dolist (win (list skilled-buffers-primary-window skilled-buffers-secondary-window))
       (when (and win (window-live-p win))
         (with-selected-window win
@@ -815,14 +838,15 @@ Routes buffers according to skilled-buffers rules when active."
         (add-hook 'kill-emacs-hook #'skilled-buffers-save-list)
         (add-hook 'buffer-list-update-hook #'skilled-buffers--update-tab-line)
         
+        ;; Add window-buffer-change hook to catch ALL buffer switches
+        ;; This handles projectile, find-file, switch-to-buffer, and any other method
+        (add-hook 'window-buffer-change-functions #'skilled-buffers--window-buffer-change-function)
+        
         ;; Add display buffer action at the BEGINNING (highest priority)
         ;; This ensures skilled-buffers takes precedence over other rules (magit, etc.)
         ;; Use ^.* to properly match all buffer names from the start
         (push '("^.*" skilled-buffers--display-buffer-action)
               display-buffer-alist)
-        
-        ;; Add advice to switch-to-buffer to intercept manual buffer switches
-        (advice-add 'switch-to-buffer :before #'skilled-buffers--switch-to-buffer-advice)
         
         ;; Setup tab-line
         (skilled-buffers--setup-tab-line)
@@ -833,6 +857,7 @@ Routes buffers according to skilled-buffers rules when active."
     (remove-hook 'kill-buffer-hook #'skilled-buffers--kill-buffer-hook)
     (remove-hook 'kill-emacs-hook #'skilled-buffers-save-list)
     (remove-hook 'buffer-list-update-hook #'skilled-buffers--update-tab-line)
+    (remove-hook 'window-buffer-change-functions #'skilled-buffers--window-buffer-change-function)
     
     ;; Remove display buffer action
     (setq display-buffer-alist
@@ -840,18 +865,16 @@ Routes buffers according to skilled-buffers rules when active."
                           (eq (cadr entry) 'skilled-buffers--display-buffer-action))
                         display-buffer-alist))
     
-    ;; Remove advice
-    (advice-remove 'switch-to-buffer #'skilled-buffers--switch-to-buffer-advice)
-    
     ;; Disable tab-line in both windows
-    (when (and skilled-buffers-primary-window
-               (window-live-p skilled-buffers-primary-window))
-      (with-selected-window skilled-buffers-primary-window
-        (tab-line-mode -1)))
-    (when (and skilled-buffers-secondary-window
-               (window-live-p skilled-buffers-secondary-window))
-      (with-selected-window skilled-buffers-secondary-window
-        (tab-line-mode -1)))
+    (when (fboundp 'tab-line-mode)
+      (when (and skilled-buffers-primary-window
+                 (window-live-p skilled-buffers-primary-window))
+        (with-selected-window skilled-buffers-primary-window
+          (tab-line-mode -1)))
+      (when (and skilled-buffers-secondary-window
+                 (window-live-p skilled-buffers-secondary-window))
+        (with-selected-window skilled-buffers-secondary-window
+          (tab-line-mode -1))))
     
     (message "Skilled buffers mode disabled")))
 
